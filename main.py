@@ -73,7 +73,7 @@ def build_config(overrides: dict = {}):
                 if real_key in config:
                     config[real_key] = coerce(real_key, v)
 
-    # Layer 4: OS env vars with APP_ prefix
+    # Layer 4: OS env vars (APP_* prefix) — higher than YAML and .env
     for k, v in os.environ.items():
         if k == "NUM_WORKERS":
             config["workers"] = int(v)
@@ -93,6 +93,7 @@ def build_config(overrides: dict = {}):
     # Mask api_key
     config["api_key"] = "****"
     return config
+
 
 # ── middleware ────────────────────────────────────────────────────────────────
 
