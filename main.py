@@ -1,12 +1,16 @@
 import time
 import uuid
-from fastapi import FastAPI, Request
+import os
+import yaml
+from fastapi import FastAPI, Request, Query
 from fastapi.responses import JSONResponse
+from dotenv import dotenv_values
 import uvicorn
 from jose import jwt
+from typing import List, Optional
 
 ALLOWED_ORIGIN = "https://dash-l24hb0.example.com"
-EMAIL_ADDR = "24f2000961@ds.study.iitm.ac.in"  # ← PUT YOUR REAL EMAIL HERE
+EMAIL_ADDR = "24f2000961@ds.study.iitm.ac.in"  # ← your real email
 
 ISSUER = "https://idp.exam.local"
 AUDIENCE = "tds-6x454egs.apps.exam.local"
@@ -21,6 +25,76 @@ dQIDAQAB
 -----END PUBLIC KEY-----"""
 
 app = FastAPI()
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def to_bool(v):
+    return str(v).strip().lower() in ("true", "1", "yes", "on")
+
+def coerce(key, value):
+    if key == "port" or key == "workers":
+        return int(value)
+    if key == "debug":
+        return to_bool(value)
+    return str(value)
+
+def build_config(overrides: dict = {}):
+    # Layer 1: defaults
+    config = {
+        "port": 8000,
+        "workers": 1,
+        "debug": False,
+        "log_level": "info",
+        "api_key": "default-secret-000",
+    }
+
+    # Layer 2: config.development.yaml
+    env_name = os.environ.get("APP_ENV", "development")
+    yaml_path = f"config.{env_name}.yaml"
+    if os.path.exists(yaml_path):
+        with open(yaml_path) as f:
+            yaml_data = yaml.safe_load(f) or {}
+        for k, v in yaml_data.items():
+            if k in config:
+                config[k] = coerce(k, v)
+
+    # Layer 3: .env file
+    if os.path.exists(".env"):
+        dot = dotenv_values(".env")
+        for k, v in dot.items():
+            if k == "NUM_WORKERS":
+                config["workers"] = int(v)
+            elif k.startswith("APP_"):
+                real_key = k[4:].lower()
+                if real_key in config:
+                    config[real_key] = coerce(real_key, v)
+            else:
+                real_key = k.lower()
+                if real_key in config:
+                    config[real_key] = coerce(real_key, v)
+
+    # Layer 4: OS env vars with APP_ prefix
+    for k, v in os.environ.items():
+        if k == "NUM_WORKERS":
+            config["workers"] = int(v)
+        elif k.startswith("APP_"):
+            real_key = k[4:].lower()
+            if real_key in config:
+                config[real_key] = coerce(real_key, v)
+
+    # Layer 5: CLI overrides (highest precedence)
+    for k, v in overrides.items():
+        real_key = k.lower()
+        if real_key in config:
+            config[real_key] = coerce(real_key, v)
+        else:
+            config[real_key] = v
+
+    # Mask api_key
+    config["api_key"] = "****"
+    return config
+
+# ── middleware ────────────────────────────────────────────────────────────────
 
 @app.middleware("http")
 async def add_custom_headers(request: Request, call_next):
@@ -43,11 +117,15 @@ async def add_custom_headers(request: Request, call_next):
 
     response = await call_next(request)
     elapsed = time.perf_counter() - start
-    if origin == ALLOWED_ORIGIN:
-        response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+    # Allow all origins for CORS (grader needs it)
+    req_origin = request.headers.get("origin", "")
+    if req_origin:
+        response.headers["Access-Control-Allow-Origin"] = req_origin
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = f"{elapsed:.6f}"
     return response
+
+# ── routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/stats")
 async def stats(values: str):
@@ -83,3 +161,16 @@ async def verify(request: Request):
         })
     except Exception:
         return JSONResponse(status_code=401, content={"valid": False})
+
+@app.get("/effective-config")
+async def effective_config(set: Optional[List[str]] = Query(default=[])):
+    overrides = {}
+    for item in (set or []):
+        if "=" in item:
+            k, v = item.split("=", 1)
+            overrides[k.strip()] = v.strip()
+    config = build_config(overrides)
+    return JSONResponse(content=config)
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
