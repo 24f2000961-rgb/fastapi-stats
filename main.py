@@ -102,15 +102,21 @@ async def add_custom_headers(request: Request, call_next):
     start = time.perf_counter()
     request_id = str(uuid.uuid4())
     origin = request.headers.get("origin", "")
+    path = request.url.path
 
     if request.method == "OPTIONS":
-        if origin == ALLOWED_ORIGIN:
-            response = JSONResponse(content={}, status_code=200)
-            response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "*"
-        else:
-            response = JSONResponse(content={}, status_code=200)
+        response = JSONResponse(content={}, status_code=200)
+        if path == "/stats":
+            if origin == ALLOWED_ORIGIN:
+                response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+                response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                response.headers["Access-Control-Allow-Headers"] = "*"
+        elif path == "/effective-config":
+            if origin:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                response.headers["Access-Control-Allow-Headers"] = "*"
+        # /verify: no CORS headers
         elapsed = time.perf_counter() - start
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Process-Time"] = f"{elapsed:.6f}"
@@ -118,10 +124,15 @@ async def add_custom_headers(request: Request, call_next):
 
     response = await call_next(request)
     elapsed = time.perf_counter() - start
-    # Allow all origins for CORS (grader needs it)
-    req_origin = request.headers.get("origin", "")
-    if req_origin:
-        response.headers["Access-Control-Allow-Origin"] = req_origin
+
+    if path == "/stats":
+        if origin == ALLOWED_ORIGIN:
+            response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+    elif path == "/effective-config":
+        if origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+    # /verify: no CORS headers at all
+
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = f"{elapsed:.6f}"
     return response
